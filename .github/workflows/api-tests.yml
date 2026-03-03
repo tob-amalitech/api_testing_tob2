@@ -1,0 +1,360 @@
+name: REST Assured API Tests — CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  checks: write
+  pull-requests: write
+  actions: read
+  pages: write
+  id-token: write
+  packages: write
+
+jobs:
+  test:
+    name: Run REST Assured API Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    outputs:
+      total:   ${{ steps.test_summary.outputs.total }}
+      passed:  ${{ steps.test_summary.outputs.passed }}
+      failed:  ${{ steps.test_summary.outputs.failed }}
+      skipped: ${{ steps.test_summary.outputs.skipped }}
+      result:  ${{ steps.test_summary.outputs.result }}
+
+    steps:
+      # ── 1. Checkout ───────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. Java 11 ───────────────────────────────────────────
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: maven
+
+      # ── 3. Maven cache ───────────────────────────────────────
+      - name: Cache Maven packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
+      # ── 4. Run API tests ─────────────────────────────────────
+      - name: Run API Tests with Maven
+        run: mvn clean test -B
+        env:
+          BASE_URL: https://jsonplaceholder.typicode.com
+        continue-on-error: true
+
+      # ── 5. Upload Allure results ──────────────────────────────
+      - name: Upload Allure Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: allure-results
+          path: target/allure-results
+          retention-days: 30
+
+      # ── 6. Upload Surefire reports ────────────────────────────
+      - name: Upload Surefire Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          retention-days: 30
+
+      # ── 7. Generate Allure HTML report ────────────────────────
+      - name: Generate Allure Report
+        uses: simple-elf/allure-report-action@master
+        if: always()
+        with:
+          allure_results: target/allure-results
+          allure_report: allure-report
+          allure_history: allure-history
+          keep_reports: 20
+
+      # ── 8. Deploy Allure report to GitHub Pages ───────────────
+      - name: Deploy Allure Report to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        if: always()
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: allure-report
+
+      # ── 9. Publish JUnit test summary ────────────────────────
+      - name: Publish Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: TestNG Results
+          path: target/surefire-reports/junitreports/*.xml
+          reporter: java-junit
+          fail-on-error: false
+
+      # ── 10. Capture test counts for notifications ─────────────
+      - name: Extract Test Summary
+        id: test_summary
+        if: always()
+        run: |
+          TOTAL=0; PASSED=0; FAILED=0; SKIPPED=0
+          for f in target/surefire-reports/junitreports/*.xml; do
+            [ -f "$f" ] || continue
+            t=$(grep -oP 'tests="\K[0-9]+' "$f" | head -1 || echo 0)
+            fa=$(grep -oP 'failures="\K[0-9]+' "$f" | head -1 || echo 0)
+            e=$(grep -oP 'errors="\K[0-9]+' "$f" | head -1 || echo 0)
+            s=$(grep -oP 'skipped="\K[0-9]+' "$f" | head -1 || echo 0)
+            TOTAL=$((TOTAL + t))
+            FAILED=$((FAILED + fa + e))
+            SKIPPED=$((SKIPPED + s))
+          done
+          PASSED=$((TOTAL - FAILED - SKIPPED))
+          echo "total=$TOTAL"     >> $GITHUB_OUTPUT
+          echo "passed=$PASSED"   >> $GITHUB_OUTPUT
+          echo "failed=$FAILED"   >> $GITHUB_OUTPUT
+          echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
+          if [ "$FAILED" -gt 0 ]; then
+            echo "result=FAILED" >> $GITHUB_OUTPUT
+          else
+            echo "result=PASSED" >> $GITHUB_OUTPUT
+          fi
+
+  # ── Docker Build ─────────────────────────────────────────────
+  docker:
+    name: Build and Push Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && needs.test.result == 'success'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # ── Notifications ─────────────────────────────────────────────
+  notify:
+    name: Send Notifications
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      # ── Prepare status labels ─────────────────────────────────
+      - name: Prepare notification content
+        id: content
+        run: |
+          if [ "${{ needs.test.result }}" == "success" ]; then
+            echo "emoji=✅"       >> $GITHUB_OUTPUT
+            echo "label=PASSED"  >> $GITHUB_OUTPUT
+            echo "colour=good"   >> $GITHUB_OUTPUT
+          else
+            echo "emoji=❌"       >> $GITHUB_OUTPUT
+            echo "label=FAILED"  >> $GITHUB_OUTPUT
+            echo "colour=danger" >> $GITHUB_OUTPUT
+          fi
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "trigger=Pull Request #${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          else
+            echo "trigger=${{ github.event_name }} on ${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      # ── Slack notification ────────────────────────────────────
+      - name: Slack Notification
+        if: env.SLACK_WEBHOOK_URL != ''
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              "attachments": [{
+                "color": "${{ steps.content.outputs.colour }}",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "${{ steps.content.outputs.emoji }} REST Assured API Tests — ${{ steps.content.outputs.label }}"
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": [
+                      { "type": "mrkdwn", "text": "*Repository:*\n${{ github.repository }}" },
+                      { "type": "mrkdwn", "text": "*Branch:*\n`${{ github.ref_name }}`" },
+                      { "type": "mrkdwn", "text": "*Triggered by:*\n${{ steps.content.outputs.trigger }}" },
+                      { "type": "mrkdwn", "text": "*Actor:*\n${{ github.actor }}" },
+                      { "type": "mrkdwn", "text": "*Commit:*\n`${{ github.sha }}`" },
+                      { "type": "mrkdwn", "text": "*Run ID:*\n`${{ github.run_id }}`" }
+                    ]
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "*Test Results:*\n✅ Passed: *${{ needs.test.outputs.passed || 'N/A' }}* | ❌ Failed: *${{ needs.test.outputs.failed || 'N/A' }}* | ⏭ Skipped: *${{ needs.test.outputs.skipped || 'N/A' }}* | Total: *${{ needs.test.outputs.total || 'N/A' }}*"
+                    }
+                  },
+                  {
+                    "type": "actions",
+                    "elements": [
+                      {
+                        "type": "button",
+                        "text": { "type": "plain_text", "text": "View Run Logs" },
+                        "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                      },
+                      {
+                        "type": "button",
+                        "text": { "type": "plain_text", "text": "View Allure Report" },
+                        "url": "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+                      }
+                    ]
+                  }
+                ]
+              }]
+            }
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      # ── Email notification ────────────────────────────────────
+      - name: Send email notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          to: ${{ secrets.MAIL_RECIPIENT }}
+          from: REST Assured CI Bot <${{ secrets.MAIL_USERNAME }}>
+          subject: "${{ steps.content.outputs.emoji }} REST Assured API Tests ${{ steps.content.outputs.label }} — ${{ github.ref_name }} (${{ github.sha }})"
+          html_body: |
+            <!DOCTYPE html>
+            <html>
+            <body style="font-family: Arial, sans-serif; color: #333; max-width: 640px; margin: auto;">
+              <div style="background: #1a1a2e; padding: 20px; border-radius: 8px 8px 0 0;">
+                <h2 style="color: #fff; margin: 0;">
+                  ${{ steps.content.outputs.emoji }} REST Assured API Tests
+                </h2>
+                <p style="color: #aaa; margin: 4px 0 0;">Automated CI Report — JSONPlaceholder API</p>
+              </div>
+
+              <div style="border: 1px solid #ddd; border-top: none; padding: 24px; border-radius: 0 0 8px 8px;">
+
+                <h3 style="margin-top: 0;">Run Status:
+                  <span style="color: ${{ needs.test.result == 'success' && '#27ae60' || '#e74c3c' }};">
+                    ${{ steps.content.outputs.label }}
+                  </span>
+                </h3>
+
+                <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                  <tr style="background: #f8f9fa;">
+                    <td style="padding: 8px 12px; border: 1px solid #dee2e6; font-weight: bold; width: 40%;">Repository</td>
+                    <td style="padding: 8px 12px; border: 1px solid #dee2e6;">${{ github.repository }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 12px; border: 1px solid #dee2e6; font-weight: bold;">Branch</td>
+                    <td style="padding: 8px 12px; border: 1px solid #dee2e6;">${{ github.ref_name }}</td>
+                  </tr>
+                  <tr style="background: #f8f9fa;">
+                    <td style="padding: 8px 12px; border: 1px solid #dee2e6; font-weight: bold;">Triggered By</td>
+                    <td style="padding: 8px 12px; border: 1px solid #dee2e6;">${{ steps.content.outputs.trigger }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 12px; border: 1px solid #dee2e6; font-weight: bold;">Actor</td>
+                    <td style="padding: 8px 12px; border: 1px solid #dee2e6;">${{ github.actor }}</td>
+                  </tr>
+                  <tr style="background: #f8f9fa;">
+                    <td style="padding: 8px 12px; border: 1px solid #dee2e6; font-weight: bold;">Commit SHA</td>
+                    <td style="padding: 8px 12px; border: 1px solid #dee2e6; font-family: monospace; font-size: 13px;">${{ github.sha }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 12px; border: 1px solid #dee2e6; font-weight: bold;">Run ID</td>
+                    <td style="padding: 8px 12px; border: 1px solid #dee2e6;">${{ github.run_id }}</td>
+                  </tr>
+                </table>
+
+                <h3>Test Results</h3>
+                <table style="width: 100%; border-collapse: collapse; text-align: center; margin-bottom: 24px;">
+                  <tr style="background: #343a40; color: #fff;">
+                    <th style="padding: 10px; border: 1px solid #495057;">Total</th>
+                    <th style="padding: 10px; border: 1px solid #495057;">✅ Passed</th>
+                    <th style="padding: 10px; border: 1px solid #495057;">❌ Failed</th>
+                    <th style="padding: 10px; border: 1px solid #495057;">⏭ Skipped</th>
+                  </tr>
+                  <tr style="font-size: 18px; font-weight: bold;">
+                    <td style="padding: 12px; border: 1px solid #dee2e6;">${{ needs.test.outputs.total || '—' }}</td>
+                    <td style="padding: 12px; border: 1px solid #dee2e6; color: #27ae60;">${{ needs.test.outputs.passed || '—' }}</td>
+                    <td style="padding: 12px; border: 1px solid #dee2e6; color: #e74c3c;">${{ needs.test.outputs.failed || '—' }}</td>
+                    <td style="padding: 12px; border: 1px solid #dee2e6; color: #f39c12;">${{ needs.test.outputs.skipped || '—' }}</td>
+                  </tr>
+                </table>
+
+                <div style="text-align: center; margin-top: 24px;">
+                  <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                     style="background: #0d6efd; color: #fff; padding: 10px 20px; border-radius: 5px; text-decoration: none; margin-right: 10px;">
+                    View Run Logs
+                  </a>
+                  <a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+                     style="background: #6f42c1; color: #fff; padding: 10px 20px; border-radius: 5px; text-decoration: none;">
+                    View Allure Report
+                  </a>
+                </div>
+              </div>
+
+              <p style="text-align: center; font-size: 12px; color: #999; margin-top: 16px;">
+                This is an automated message from GitHub Actions · REST Assured API Test Suite
+              </p>
+            </body>
+            </html>
+
+      # ── Final console summary ─────────────────────────────────
+      - name: Test Status Summary
+        run: |
+          echo "=================================================="
+          echo "  REST ASSURED API TESTS — RUN COMPLETE"
+          echo "=================================================="
+          echo "  Status  : ${{ steps.content.outputs.emoji }} ${{ steps.content.outputs.label }}"
+          echo "  Repo    : ${{ github.repository }}"
+          echo "  Branch  : ${{ github.ref_name }}"
+          echo "  Actor   : ${{ github.actor }}"
+          echo "  Trigger : ${{ steps.content.outputs.trigger }}"
+          echo "  Run ID  : ${{ github.run_id }}"
+          echo "=================================================="

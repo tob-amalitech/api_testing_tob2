@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE suite SYSTEM "https://testng.org/testng-1.0.dtd">
+
+<suite name="JSONPlaceholder API Test Suite" verbose="2" parallel="methods" thread-count="4">
+
+    <listeners>
+        <listener class-name="io.qameta.allure.testng.AllureTestNg"/>
+    </listeners>
+
+    <test name="GET Tests">
+        <classes>
+            <class name="com.apitest.tests.GetPostsTest"/>
+        </classes>
+    </test>
+
+    <test name="POST Tests">
+        <classes>
+            <class name="com.apitest.tests.PostPostsTest"/>
+        </classes>
+    </test>
+
+    <test name="PUT Tests">
+        <classes>
+            <class name="com.apitest.tests.PutPostsTest"/>
+        </classes>
+    </test>
+
+    <test name="DELETE Tests">
+        <classes>
+            <class name="com.apitest.tests.DeletePostsTest"/>
+        </classes>
+    </test>
+
+</suite>

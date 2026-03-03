@@ -1,0 +1,39 @@
+version: '3.9'
+
+services:
+  # ─── Run API Tests ────────────────────────────────
+  api-tests:
+    build:
+      context: .
+      target: builder
+    container_name: api-tests-runner
+    environment:
+      - BASE_URL=https://jsonplaceholder.typicode.com
+      - MAVEN_OPTS=-Xmx512m
+    volumes:
+      - allure-results:/app/target/allure-results
+      - test-logs:/app/target/logs
+    command: mvn test -B --no-transfer-progress
+    networks:
+      - test-network
+
+  # ─── Serve Allure Reports ─────────────────────────
+  allure-report:
+    build:
+      context: .
+      target: report-server
+    container_name: allure-report-server
+    ports:
+      - "8080:80"
+    depends_on:
+      - api-tests
+    networks:
+      - test-network
+
+volumes:
+  allure-results:
+  test-logs:
+
+networks:
+  test-network:
+    driver: bridge
