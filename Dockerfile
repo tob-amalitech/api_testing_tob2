@@ -1,10 +1,24 @@
 # ─────────────────────────────────────────────
 # Stage 1: Build & Test
 # ─────────────────────────────────────────────
-FROM maven:3.9.6-eclipse-temurin-25 AS builder
+FROM eclipse-temurin:25-jdk AS builder
 
 LABEL maintainer="API Test Automation Team"
 LABEL description="REST Assured API Testing with Allure Reports"
+
+# Install Maven and curl
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Maven 3.9.6
+RUN curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz | \
+    tar xzf - -C /opt && \
+    ln -s /opt/apache-maven-3.9.6 /opt/maven
+
+ENV PATH="/opt/maven/bin:${PATH}"
+ENV MAVEN_HOME="/opt/maven"
 
 WORKDIR /app
 
