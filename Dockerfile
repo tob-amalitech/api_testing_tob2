@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────
 # Stage 1: Build & Test
 # ─────────────────────────────────────────────
-FROM maven:3.9.6-eclipse-temurin-11 AS builder
+FROM maven:3.9.6-eclipse-temurin-25 AS builder
 
 LABEL maintainer="API Test Automation Team"
 LABEL description="REST Assured API Testing with Allure Reports"
