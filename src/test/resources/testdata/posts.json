@@ -1,0 +1,44 @@
+{
+  "newPost": {
+    "userId": 1,
+    "title": "Test Post Title",
+    "body": "This is the body of the test post created via REST Assured."
+  },
+  "minimalPost": {
+    "userId": 5,
+    "title": "Minimal Post",
+    "body": "Minimal body content"
+  },
+  "headerPost": {
+    "userId": 1,
+    "title": "Header Validation Post",
+    "body": "Checking response headers"
+  },
+  "rawJson": "{ \"userId\": 3, \"title\": \"Raw JSON Post\", \"body\": \"Posted via raw JSON string\" }",
+  "updatedPost": {
+    "id": 1,
+    "userId": 1,
+    "title": "Updated Post Title",
+    "body": "This is the fully updated body of post 1."
+  },
+  "updatedPostFor5": {
+    "id": 5,
+    "userId": 2,
+    "title": "Completely Replaced Title for Post 5",
+    "body": "New body text for post 5 via PUT."
+  },
+  "partialJson": "{ \"title\": \"Patched Title Only\" }",
+  "headerUpdate": {
+    "id": 2,
+    "userId": 1,
+    "title": "Header Check Update",
+    "body": "Testing response headers on PUT"
+  }
+  ,
+  "defaultPostId": 1,
+  "invalidId": 9999,
+  "userIdFilter": 1,
+  "defaultDeleteId": 2,
+  "headerDeleteId": 5,
+  "deleteIds": [3, 10, 50, 100]
+}

@@ -12,10 +12,6 @@ import org.testng.annotations.BeforeSuite;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * Base configuration class for all API tests.
- * Sets up REST Assured request/response specifications and Allure integration.
- */
 public class BaseTest {
 
     protected static final Logger log = LoggerFactory.getLogger(BaseTest.class);
@@ -40,7 +36,7 @@ public class BaseTest {
                 .setBaseUri(BASE_URL)
                 .setContentType(ContentType.JSON)
                 .setAccept(ContentType.JSON)
-                .addFilter(new AllureRestAssured())  // Allure integration
+                .addFilter(new AllureRestAssured())
                 .log(LogDetail.ALL)
                 .build();
 
